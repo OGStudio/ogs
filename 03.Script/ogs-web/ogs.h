@@ -790,8 +790,9 @@ class Application
         {
             delete this->viewer;
         }
-    private:
+    public:
         script::Environment *environment;
+    private:
         std::vector<script::EnvironmentClient *> clients;
     
         void setupScripting()

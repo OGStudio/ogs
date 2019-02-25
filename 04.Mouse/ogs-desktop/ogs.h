@@ -24,9 +24,17 @@ freely, subject to the following restrictions:
 #ifndef OGS_H
 #define OGS_H
 
+#include <algorithm>
+#include <functional>
+#include <string>
+#include <vector>
+
 #include <map>
 
 #include <cstdarg>
+
+#include <algorithm>
+#include <osgGA/GUIEventHandler>
 
 #include <iostream>
 
@@ -334,6 +342,122 @@ class Base64 {
 namespace ogs
 {
 
+namespace core
+{
+
+class Reporter
+{
+    public:
+        typedef std::function<void()> Callback;
+
+    public:
+        Reporter() { }
+
+        std::string name;
+
+        void addCallback(Callback callback, const std::string &name = "")
+        {
+            // Work around callback reactivation happenning
+            // before `report()` call.
+            if (this->reactivateInactiveCallback(name))
+            {
+                //CORE_REPORTER_LOG("reactivated callback named '%s'", name.c_str());
+                return;
+            }
+
+            this->callbacks.push_back({callback, name});
+            //CORE_REPORTER_LOG("added callback named '%s'", name.c_str());
+        }
+
+        void addOneTimeCallback(Callback callback)
+        {
+            this->oneTimeCallbacks.push_back(callback);
+        }
+
+        void removeCallback(const std::string &name)
+        {
+            // This call only deactivates a callback for
+            // later removal that happens during next report() call.
+            for (auto callback : this->callbacks)
+            {
+                if (callback.name == name)
+                {
+                    this->inactiveCallbackNames.push_back(name);
+                }
+            }
+        }
+
+        void report()
+        {
+            this->removeInactiveCallbacks();
+
+            // Call normal callbacks.
+            for (auto callback : this->callbacks)
+            {
+                callback.callback();
+            }
+
+            // Iterate over duplicated one-time callbacks.
+            auto oneTimeCallbacks = this->oneTimeCallbacks; 
+            // Remove one-time callbacks.
+            this->oneTimeCallbacks.clear();
+            
+            // Call one-time callbacks.
+            for (auto callback : oneTimeCallbacks)
+            {
+                callback();
+            }
+        }
+
+    private:
+        struct NamedCallback
+        {
+            Callback callback;
+            std::string name;
+        };
+
+        std::vector<NamedCallback> callbacks;
+        std::vector<std::string> inactiveCallbackNames;
+        std::vector<Callback> oneTimeCallbacks;
+
+    private:
+        bool reactivateInactiveCallback(const std::string &name)
+        {
+            auto inactives = &this->inactiveCallbackNames;
+            auto it = std::find(inactives->begin(), inactives->end(), name);
+            if (it != inactives->end())
+            {
+                inactives->erase(it);
+                return true;
+            }
+            return false;
+        }
+
+        void removeInactiveCallbacks()
+        {
+            // Loop through the names of inactive callbacks.
+            auto name = this->inactiveCallbackNames.begin();
+            for (; name != this->inactiveCallbackNames.end(); ++name)
+            {
+                // Loop through callbacks to find matching name.
+                auto callback = this->callbacks.begin();
+                for (; callback != this->callbacks.end(); ++callback)
+                {
+                    if (callback->name == *name)
+                    {
+                        // Remove matching callback.
+                        this->callbacks.erase(callback);
+                        break;
+                    }
+                }
+            }
+            // Clear the list of inactive callbacks.
+            this->inactiveCallbackNames.clear();
+        }
+};
+
+}
+
 namespace format
 {
 
@@ -492,6 +616,133 @@ void logprintf(const char *fmt, ...)
     va_end(args);
     log(msg);
 }
+
+}
+
+namespace input
+{
+
+//! NOTE Mobile platforms only have LEFT button.
+enum MOUSE_BUTTON
+{
+    MOUSE_BUTTON_NONE,
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE,
+};
+
+//! Convert OpenSceneGraph key index to mouse button enum value.
+MOUSE_BUTTON indexToMouseButton(int index)
+{
+    switch (index)
+    {
+        case osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_LEFT;
+        case osgGA::GUIEventAdapter::MIDDLE_MOUSE_BUTTON:
+            return MOUSE_BUTTON_MIDDLE;
+        case osgGA::GUIEventAdapter::RIGHT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_RIGHT;
+        default:
+            return MOUSE_BUTTON_NONE;
+    }
+}
+
+//! Convert mouse button enum value to string representation.
+const char *mouseButtonToString(MOUSE_BUTTON button)
+{
+    switch (button)
+    {
+        case MOUSE_BUTTON_LEFT:
+            return "MOUSE_BUTTON_LEFT";
+        case MOUSE_BUTTON_RIGHT:
+            return "MOUSE_BUTTON_RIGHT";
+        case MOUSE_BUTTON_MIDDLE:
+            return "MOUSE_BUTTON_MIDDLE";
+        default:
+            return "MOUSE_BUTTON_NONE";
+    }
+}
+//! Handle OpenSceneGraph mouse events.
+class Mouse : public osgGA::GUIEventHandler
+{
+    public:
+        Mouse() : position(0, 0) { }
+
+        // Current mouse position.
+        osg::Vec2f position;
+        core::Reporter positionChanged;
+
+        // Currently pressed mouse buttons.
+        std::vector<MOUSE_BUTTON> pressedButtons;
+        core::Reporter pressedButtonsChanged;
+
+        bool handle(
+            const osgGA::GUIEventAdapter &eventAdapter,
+            osgGA::GUIActionAdapter &actionAdapter,
+            osg::Object *object,
+            osg::NodeVisitor *visitor
+        ) override {
+            // Report mouse position if changed.
+            osg::Vec2f pos(eventAdapter.getX(), eventAdapter.getY());
+            if (this->position != pos)
+            {
+                this->position = pos;
+                this->positionChanged.report();
+                //INPUT_MOUSE_LOG("Position: '%f x %f'", pos.x(), pos.y());
+            }
+
+            // Process pressed buttons.
+            bool isPressed = false;
+            if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::PUSH)
+            {
+                isPressed = true;
+            }
+            else if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::RELEASE)
+            {
+                // Do nothing.
+            }
+            else
+            {
+                return true;
+            }
+            auto button = indexToMouseButton(eventAdapter.getButton());
+            this->setButtonState(button, isPressed);
+            return true;
+        }
+
+    private:
+        void setButtonState(MOUSE_BUTTON button, bool state)
+        {
+            //INPUT_MOUSE_LOG("setButtonState(%d, %d)", button, state);
+            auto &buttons = this->pressedButtons;
+            auto btn = std::find(buttons.begin(), buttons.end(), button);
+            // Button is already pressed.
+            if (btn != buttons.end())
+            {
+                // Release button.
+                if (!state)
+                {
+                    buttons.erase(
+                        std::remove(buttons.begin(), buttons.end(), button),
+                        buttons.end()
+                    );
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Released button '%d'", button);
+                }
+            }
+            // Button is not pressed.
+            else
+            {
+                // Push button.
+                if (state)
+                {
+                    buttons.push_back(button);
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Pressed button '%d'", button);
+                }
+            }
+        }
+};
 
 }
 
@@ -688,6 +939,8 @@ class Application
 
             this->setupRendering();
             
+            this->setupMouse();
+            
             this->setupLua();
             
             this->setupScripting();
@@ -699,6 +952,8 @@ class Application
             this->tearScriptingDown();
             
             this->tearLuaDown();
+            
+            this->tearMouseDown();
             
             this->tearRenderingDown();
             
@@ -770,6 +1025,21 @@ class Application
                     e.what()
                 );
             }
+        }
+    public:
+        osg::ref_ptr<input::Mouse> mouse;
+    private:
+        void setupMouse()
+        {
+            // Create mouse events' handler.
+            this->mouse = new input::Mouse;
+            // Register it.
+            this->viewer->addEventHandler(this->mouse);
+        }
+        void tearMouseDown()
+        {
+            // This also removes `mouse` instance.
+            this->viewer->removeEventHandler(this->mouse);
         }
     private:
         osgViewer::Viewer *viewer;
@@ -857,7 +1127,7 @@ class Application
         }
 };
 
-const auto EXAMPLE_TITLE = "ogs-03: Script";
+const auto EXAMPLE_TITLE = "ogs-04: Mouse";
 
 struct Example
 {
@@ -904,6 +1174,8 @@ struct Example
                 });
             )
         );
+        this->setupApplicationMouse();
+        
         this->runEmbeddedAPIScript();
         
         this->runBase64Script(parameters);
@@ -912,9 +1184,78 @@ struct Example
     ~Example()
     {
 
+        this->tearApplicationMouseDown();
+        
         delete this->app;
     }
 
+    private:
+        const std::string applicationMousePressedButtonsKey =
+            "application.mouse.pressedButtons";
+        const std::string applicationMousePositionKey =
+            "application.mouse.position";
+        const std::string applicationMouseCallbackName =
+            "ApplicationMouseTransmitter";
+    
+        void setupApplicationMouse()
+        {
+            // Transmit pressed buttons.
+            this->app->mouse->pressedButtonsChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMouseButtons();
+                },
+                this->applicationMouseCallbackName
+            );
+            // Transmit position.
+            this->app->mouse->positionChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMousePosition();
+                },
+                this->applicationMouseCallbackName
+            );
+            // NOTE We don't provide getters for the keys because Lua side should
+            // NOTE keep the state itself.
+            // NOTE Also, we don't provide setters for the keys because C++ side
+            // NOTE has no such notion.
+        }
+        void tearApplicationMouseDown()
+        {
+            this->app->mouse->pressedButtonsChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+            this->app->mouse->positionChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+        }
+        void transmitApplicationMouseButtons()
+        {
+            // Convert buttons to string representation.
+            auto buttons = this->app->mouse->pressedButtons;
+            std::vector<std::string> strbuttons;
+            for (auto button : buttons)
+            {
+                strbuttons.push_back(mouseButtonToString(button));
+            }
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePressedButtonsKey,
+                strbuttons
+            );
+        }
+        void transmitApplicationMousePosition()
+        {
+            // Convert position to string representation.
+            auto position = this->app->mouse->position;
+            std::vector<std::string> strposition = {
+                format::printfString("%f", position.x()),
+                format::printfString("%f", position.y()),
+            };
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePositionKey,
+                strposition
+            );
+        }
     private:
         void runBase64Script(const Parameters &parameters)
         {

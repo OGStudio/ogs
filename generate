@@ -20,6 +20,7 @@ STAGES="
 01.EmptyScreen
 02.Lua
 03.Script
+04.Mouse
 "
 
 # Directories with variants.

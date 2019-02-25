@@ -24,9 +24,17 @@ freely, subject to the following restrictions:
 #ifndef OGS_H
 #define OGS_H
 
-#include <map>
+#include <algorithm>
+#include <functional>
+#include <string>
+#include <vector>
 
 #include <cstdarg>
+
+#include <map>
+
+#include <algorithm>
+#include <osgGA/GUIEventHandler>
 
 #include <iostream>
 
@@ -37,9 +45,10 @@ freely, subject to the following restrictions:
 #include <osgViewer/Viewer>
 #include <osgGA/TrackballManipulator>
 
-#include "api.lua.h"
+#include <emscripten.h>
+#include <SDL2/SDL.h>
 
-#include <osg/Camera>
+#include "api.lua.h"
 
 #include <functional>
 
@@ -52,6 +61,13 @@ freely, subject to the following restrictions:
 #define SCRIPT_ENVIRONMENT_LOG(...) \
     log::logprintf( \
         SCRIPT_ENVIRONMENT_LOG_PREFIX, \
+        this, \
+        format::printfString(__VA_ARGS__).c_str() \
+    )
+#define MAIN_APPLICATION_LOG_PREFIX "main::Application(%p) %s"
+#define MAIN_APPLICATION_LOG(...) \
+    log::logprintf( \
+        MAIN_APPLICATION_LOG_PREFIX, \
         this, \
         format::printfString(__VA_ARGS__).c_str() \
     )
@@ -334,6 +350,122 @@ class Base64 {
 namespace ogs
 {
 
+namespace core
+{
+
+class Reporter
+{
+    public:
+        typedef std::function<void()> Callback;
+
+    public:
+        Reporter() { }
+
+        std::string name;
+
+        void addCallback(Callback callback, const std::string &name = "")
+        {
+            // Work around callback reactivation happenning
+            // before `report()` call.
+            if (this->reactivateInactiveCallback(name))
+            {
+                //CORE_REPORTER_LOG("reactivated callback named '%s'", name.c_str());
+                return;
+            }
+
+            this->callbacks.push_back({callback, name});
+            //CORE_REPORTER_LOG("added callback named '%s'", name.c_str());
+        }
+
+        void addOneTimeCallback(Callback callback)
+        {
+            this->oneTimeCallbacks.push_back(callback);
+        }
+
+        void removeCallback(const std::string &name)
+        {
+            // This call only deactivates a callback for
+            // later removal that happens during next report() call.
+            for (auto callback : this->callbacks)
+            {
+                if (callback.name == name)
+                {
+                    this->inactiveCallbackNames.push_back(name);
+                }
+            }
+        }
+
+        void report()
+        {
+            this->removeInactiveCallbacks();
+
+            // Call normal callbacks.
+            for (auto callback : this->callbacks)
+            {
+                callback.callback();
+            }
+
+            // Iterate over duplicated one-time callbacks.
+            auto oneTimeCallbacks = this->oneTimeCallbacks; 
+            // Remove one-time callbacks.
+            this->oneTimeCallbacks.clear();
+            
+            // Call one-time callbacks.
+            for (auto callback : oneTimeCallbacks)
+            {
+                callback();
+            }
+        }
+
+    private:
+        struct NamedCallback
+        {
+            Callback callback;
+            std::string name;
+        };
+
+        std::vector<NamedCallback> callbacks;
+        std::vector<std::string> inactiveCallbackNames;
+        std::vector<Callback> oneTimeCallbacks;
+
+    private:
+        bool reactivateInactiveCallback(const std::string &name)
+        {
+            auto inactives = &this->inactiveCallbackNames;
+            auto it = std::find(inactives->begin(), inactives->end(), name);
+            if (it != inactives->end())
+            {
+                inactives->erase(it);
+                return true;
+            }
+            return false;
+        }
+
+        void removeInactiveCallbacks()
+        {
+            // Loop through the names of inactive callbacks.
+            auto name = this->inactiveCallbackNames.begin();
+            for (; name != this->inactiveCallbackNames.end(); ++name)
+            {
+                // Loop through callbacks to find matching name.
+                auto callback = this->callbacks.begin();
+                for (; callback != this->callbacks.end(); ++callback)
+                {
+                    if (callback->name == *name)
+                    {
+                        // Remove matching callback.
+                        this->callbacks.erase(callback);
+                        break;
+                    }
+                }
+            }
+            // Clear the list of inactive callbacks.
+            this->inactiveCallbackNames.clear();
+        }
+};
+
+}
+
 namespace format
 {
 
@@ -395,16 +527,6 @@ std::vector<std::string> splitString(
     }
     return result;
 }
-//! Find prefix in the provided string.
-bool stringStartsWith(const std::string &s, const std::string &prefix)
-{
-    // Source: https://stackoverflow.com/a/8095127
-    // Topic: how to check string start in C++
-    return
-        (prefix.length() <= s.length()) &&
-        std::equal(prefix.begin(), prefix.end(), s.begin())
-        ;
-}
 //! Combine several strings into one
 std::string stringsToString(
     const std::vector<std::string> &strings,
@@ -427,34 +549,6 @@ std::string stringsToString(
 
     return result;
 }
-typedef std::map<std::string, std::string> Parameters;
-//! Convert command line arguments in the form of `--key=value` to parameters.
-Parameters commandLineArgumentsToParameters(
-    int argc,
-    char *argv[]
-) {
-    Parameters parameters;
-    // Start with index #1 because index #0 contains program name.
-    for (auto i = 1; i < argc; ++i)
-    {
-        auto argument = std::string(argv[i]);
-        // Only accept arguments starting with `--`.
-        if (format::stringStartsWith(argument, "--"))
-        {
-            // Skip the dashes.
-            auto option = argument.substr(2);
-            // Only split once.
-            auto keyAndValue = format::splitString(option, "=", 1);
-            if (keyAndValue.size() == 2)
-            {
-                auto key = keyAndValue[0];
-                auto value = keyAndValue[1];
-                parameters[key] = value;
-            }
-        }
-    }
-    return parameters;
-}
 //! Construct a string using printf-like syntax.
 
 //! NOTE Only 1024 characters fit in.
@@ -467,6 +561,46 @@ std::string printfString(const char *fmt, ...)
     vsnprintf(msg, PRINTF_STRING_MAX_STRLEN, fmt, args);
     va_end(args);
     return msg;
+}
+typedef std::map<std::string, std::string> Parameters;
+//! Convert query parameters starting after `?` that are in the form of `key=value` to parameters.
+Parameters urlToParameters(int argc, char *argv[])
+{
+    Parameters parameters;
+
+    // No URL has been provided. Nothing to parse.
+    if (argc < 3)
+    {
+        return parameters;
+    }
+
+    std::string query = argv[2];
+    auto options = format::splitString(query, "&");
+
+    for (auto option : options)
+    {
+        // Only split once.
+        auto keyAndValue = format::splitString(option, "=", 1);
+        if (keyAndValue.size() == 2)
+        {
+            auto key = keyAndValue[0];
+            auto value = keyAndValue[1];
+            parameters[key] = value;
+        }
+    }
+
+    // Create "base" parameter to contain
+    // everything before `? and the search string` plus `/..`
+    std::string url(argv[1]);
+    parameters["base"] = url + "/..";
+    // Use substring if there's `?` sign.
+    if (query.length())
+    {
+        auto pos = url.find("?");
+        parameters["base"] = url.substr(0, pos) + "/..";
+    }
+
+    return parameters;
 }
 
 }
@@ -495,53 +629,136 @@ void logprintf(const char *fmt, ...)
 
 }
 
+namespace input
+{
+
+//! NOTE Mobile platforms only have LEFT button.
+enum MOUSE_BUTTON
+{
+    MOUSE_BUTTON_NONE,
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE,
+};
+
+//! Convert OpenSceneGraph key index to mouse button enum value.
+MOUSE_BUTTON indexToMouseButton(int index)
+{
+    switch (index)
+    {
+        case osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_LEFT;
+        case osgGA::GUIEventAdapter::MIDDLE_MOUSE_BUTTON:
+            return MOUSE_BUTTON_MIDDLE;
+        case osgGA::GUIEventAdapter::RIGHT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_RIGHT;
+        default:
+            return MOUSE_BUTTON_NONE;
+    }
+}
+
+//! Convert mouse button enum value to string representation.
+const char *mouseButtonToString(MOUSE_BUTTON button)
+{
+    switch (button)
+    {
+        case MOUSE_BUTTON_LEFT:
+            return "MOUSE_BUTTON_LEFT";
+        case MOUSE_BUTTON_RIGHT:
+            return "MOUSE_BUTTON_RIGHT";
+        case MOUSE_BUTTON_MIDDLE:
+            return "MOUSE_BUTTON_MIDDLE";
+        default:
+            return "MOUSE_BUTTON_NONE";
+    }
+}
+//! Handle OpenSceneGraph mouse events.
+class Mouse : public osgGA::GUIEventHandler
+{
+    public:
+        Mouse() : position(0, 0) { }
+
+        // Current mouse position.
+        osg::Vec2f position;
+        core::Reporter positionChanged;
+
+        // Currently pressed mouse buttons.
+        std::vector<MOUSE_BUTTON> pressedButtons;
+        core::Reporter pressedButtonsChanged;
+
+        bool handle(
+            const osgGA::GUIEventAdapter &eventAdapter,
+            osgGA::GUIActionAdapter &actionAdapter,
+            osg::Object *object,
+            osg::NodeVisitor *visitor
+        ) override {
+            // Report mouse position if changed.
+            osg::Vec2f pos(eventAdapter.getX(), eventAdapter.getY());
+            if (this->position != pos)
+            {
+                this->position = pos;
+                this->positionChanged.report();
+                //INPUT_MOUSE_LOG("Position: '%f x %f'", pos.x(), pos.y());
+            }
+
+            // Process pressed buttons.
+            bool isPressed = false;
+            if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::PUSH)
+            {
+                isPressed = true;
+            }
+            else if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::RELEASE)
+            {
+                // Do nothing.
+            }
+            else
+            {
+                return true;
+            }
+            auto button = indexToMouseButton(eventAdapter.getButton());
+            this->setButtonState(button, isPressed);
+            return true;
+        }
+
+    private:
+        void setButtonState(MOUSE_BUTTON button, bool state)
+        {
+            //INPUT_MOUSE_LOG("setButtonState(%d, %d)", button, state);
+            auto &buttons = this->pressedButtons;
+            auto btn = std::find(buttons.begin(), buttons.end(), button);
+            // Button is already pressed.
+            if (btn != buttons.end())
+            {
+                // Release button.
+                if (!state)
+                {
+                    buttons.erase(
+                        std::remove(buttons.begin(), buttons.end(), button),
+                        buttons.end()
+                    );
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Released button '%d'", button);
+                }
+            }
+            // Button is not pressed.
+            else
+            {
+                // Push button.
+                if (state)
+                {
+                    buttons.push_back(button);
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Pressed button '%d'", button);
+                }
+            }
+        }
+};
+
+}
+
 namespace render
 {
 
-//! Create graphics context for desktop: linux, macos, windows.
-osg::GraphicsContext *createGraphicsContext(
-    const std::string &title,
-    int x,
-    int y,
-    int width,
-    int height
-) {
-    // Traits combine configuration parameters.
-    osg::GraphicsContext::Traits *traits =
-        new osg::GraphicsContext::Traits;
-    // Geometry.
-    traits->x = x;
-    traits->y = y;
-    traits->width = width;
-    traits->height = height;
-    // Title.
-    traits->windowName = title;
-    // Window borders.
-    traits->windowDecoration = true;
-    // Double buffer (simply put, it's a flicker fix).
-    traits->doubleBuffer = true;
-
-    return osg::GraphicsContext::createGraphicsContext(traits);
-}
-// Configure camera with common defaults.
-void setupCamera(
-    osg::Camera *cam,
-    osg::GraphicsContext *gc,
-    double fovy,
-    int width,
-    int height
-) {
-    // Provide GC.
-    cam->setGraphicsContext(gc);
-    // Viewport must have the same size.
-    cam->setViewport(new osg::Viewport(0, 0, width, height));
-    // Clear depth and color buffers each frame.
-    cam->setClearMask(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
-    // Aspect ratio.
-    float aspect = static_cast<float>(width) / static_cast<float>(height);
-    // Configure projection.
-    cam->setProjectionMatrixAsPerspective(fovy, aspect, 1, 1000);
-}
 
 }
 
@@ -688,6 +905,8 @@ class Application
 
             this->setupRendering();
             
+            this->setupMouse();
+            
             this->setupLua();
             
             this->setupScripting();
@@ -699,6 +918,8 @@ class Application
             this->tearScriptingDown();
             
             this->tearLuaDown();
+            
+            this->tearMouseDown();
             
             this->tearRenderingDown();
             
@@ -714,6 +935,87 @@ class Application
         {
             this->viewer->frame();
         }
+    private:
+        bool fingerEventsDetected = false;
+    public:
+        bool handleEvent(const SDL_Event &e)
+        {
+            // Get event queue.
+            osgViewer::GraphicsWindow *gw =
+                dynamic_cast<osgViewer::GraphicsWindow *>(
+                    this->viewer->getCamera()->getGraphicsContext());
+            if (!gw)
+            {
+                return false;
+            }
+            osgGA::EventQueue &queue = *(gw->getEventQueue());
+    
+            // Detect finger events.
+            if (
+                e.type == SDL_FINGERMOTION ||
+                e.type == SDL_FINGERDOWN ||
+                e.type == SDL_FINGERUP
+            ) {
+                this->fingerEventsDetected = true;
+            }
+            // Handle mouse events unless finger events are detected.
+            if (!this->fingerEventsDetected)
+            {
+                return this->handleMouseEvent(e, queue);
+            }
+            // Handle finger events.
+            return this->handleFingerEvent(e, queue);
+        }
+    
+    private:
+        bool handleFingerEvent(const SDL_Event &e, osgGA::EventQueue &queue)
+        {
+            int absX = this->windowWidth * e.tfinger.x;
+            int absY = this->windowHeight * e.tfinger.y;
+            auto correctedY = -(this->windowHeight - absY);
+            switch (e.type)
+            {
+                case SDL_FINGERMOTION:
+                    queue.mouseMotion(absX, correctedY);
+                    return true;
+                case SDL_FINGERDOWN: 
+                    // NOTE We pass `1` to denote LMB.
+                    queue.mouseButtonPress(absX, correctedY, 1);
+                    return true;
+                case SDL_FINGERUP:
+                    // NOTE We pass `1` to denote LMB.
+                    queue.mouseButtonRelease(absX, correctedY, 1);
+                    return true;
+                default:
+                    break;
+            }
+            return false;
+        }
+    
+        bool handleMouseEvent(const SDL_Event &e, osgGA::EventQueue &queue)
+        {
+            switch (e.type)
+            {
+                case SDL_MOUSEMOTION: {
+                    auto correctedY = -(this->windowHeight - e.motion.y);
+                    queue.mouseMotion(e.motion.x, correctedY);
+                    return true;
+                }
+                case SDL_MOUSEBUTTONDOWN: {
+                    auto correctedY = -(this->windowHeight - e.button.y);
+                    queue.mouseButtonPress(e.button.x, correctedY, e.button.button);
+                    return true;
+                }
+                case SDL_MOUSEBUTTONUP: {
+                    auto correctedY = -(this->windowHeight - e.button.y);
+                    queue.mouseButtonRelease(e.button.x, correctedY, e.button.button);
+                    return true;
+                }
+                default:
+                    break;
+            }
+            return false;
+        }
     public:
         void run()
         {
@@ -722,19 +1024,55 @@ class Application
                 this->frame();
             }
         }
+    private:
+        int windowWidth;
+        int windowHeight;
     public:
-        void setupWindow(
+        void setupWindow(int width, int height)
+        {
+            this->viewer->setUpViewerAsEmbeddedInWindow(0, 0, width, height);
+            this->windowWidth = width;
+            this->windowHeight = height;
+        }
+    private:
+        SDL_Window *sdlWindow = 0;
+    public:
+        bool setupWindow(
             const std::string &title,
-            int x,
-            int y,
             int width,
             int height
         ) {
-            osg::GraphicsContext *gc =
-                render::createGraphicsContext(title, x, y, width, height);
-            // Configure viewer's camera with FOVY and window size.
-            osg::Camera *cam = this->viewer->getCamera();
-            render::setupCamera(cam, gc, 30, width, height);
+            this->configureSDLGLContext();
+            this->sdlWindow =
+                SDL_CreateWindow(
+                    title.c_str(),
+                    SDL_WINDOWPOS_CENTERED,
+                    SDL_WINDOWPOS_CENTERED,
+                    width,
+                    height,
+                    SDL_WINDOW_OPENGL
+                );
+            if (!this->sdlWindow)
+            {
+                MAIN_APPLICATION_LOG(
+                    "ERROR Could not create SDL window: '%s'\n",
+                    SDL_GetError()
+                );
+                return false;
+            }
+    
+            SDL_GL_CreateContext(this->sdlWindow);
+            this->setupWindow(width, height);
+    
+            return true;
+        }
+        void configureSDLGLContext()
+        {
+            SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 5);
+            SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 5);
+            SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 5);
+            SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+            SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
         }
 
     private:
@@ -770,6 +1108,21 @@ class Application
                     e.what()
                 );
             }
+        }
+    public:
+        osg::ref_ptr<input::Mouse> mouse;
+    private:
+        void setupMouse()
+        {
+            // Create mouse events' handler.
+            this->mouse = new input::Mouse;
+            // Register it.
+            this->viewer->addEventHandler(this->mouse);
+        }
+        void tearMouseDown()
+        {
+            // This also removes `mouse` instance.
+            this->viewer->removeEventHandler(this->mouse);
         }
     private:
         osgViewer::Viewer *viewer;
@@ -857,7 +1210,7 @@ class Application
         }
 };
 
-const auto EXAMPLE_TITLE = "ogs-03: Script";
+const auto EXAMPLE_TITLE = "ogs-04: Mouse";
 
 struct Example
 {
@@ -904,6 +1257,8 @@ struct Example
                 });
             )
         );
+        this->setupApplicationMouse();
+        
         this->runEmbeddedAPIScript();
         
         this->runBase64Script(parameters);
@@ -912,9 +1267,78 @@ struct Example
     ~Example()
     {
 
+        this->tearApplicationMouseDown();
+        
         delete this->app;
     }
 
+    private:
+        const std::string applicationMousePressedButtonsKey =
+            "application.mouse.pressedButtons";
+        const std::string applicationMousePositionKey =
+            "application.mouse.position";
+        const std::string applicationMouseCallbackName =
+            "ApplicationMouseTransmitter";
+    
+        void setupApplicationMouse()
+        {
+            // Transmit pressed buttons.
+            this->app->mouse->pressedButtonsChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMouseButtons();
+                },
+                this->applicationMouseCallbackName
+            );
+            // Transmit position.
+            this->app->mouse->positionChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMousePosition();
+                },
+                this->applicationMouseCallbackName
+            );
+            // NOTE We don't provide getters for the keys because Lua side should
+            // NOTE keep the state itself.
+            // NOTE Also, we don't provide setters for the keys because C++ side
+            // NOTE has no such notion.
+        }
+        void tearApplicationMouseDown()
+        {
+            this->app->mouse->pressedButtonsChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+            this->app->mouse->positionChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+        }
+        void transmitApplicationMouseButtons()
+        {
+            // Convert buttons to string representation.
+            auto buttons = this->app->mouse->pressedButtons;
+            std::vector<std::string> strbuttons;
+            for (auto button : buttons)
+            {
+                strbuttons.push_back(mouseButtonToString(button));
+            }
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePressedButtonsKey,
+                strbuttons
+            );
+        }
+        void transmitApplicationMousePosition()
+        {
+            // Convert position to string representation.
+            auto position = this->app->mouse->position;
+            std::vector<std::string> strposition = {
+                format::printfString("%f", position.x()),
+                format::printfString("%f", position.y()),
+            };
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePositionKey,
+                strposition
+            );
+        }
     private:
         void runBase64Script(const Parameters &parameters)
         {

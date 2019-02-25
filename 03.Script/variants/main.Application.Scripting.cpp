@@ -5,8 +5,9 @@ FEATURE ogs.h/TearDown
 this->tearScriptingDown();
 
 FEATURE ogs.h/Impl
-private:
+public:
     script::Environment *environment;
+private:
     std::vector<script::EnvironmentClient *> clients;
 
     void setupScripting()

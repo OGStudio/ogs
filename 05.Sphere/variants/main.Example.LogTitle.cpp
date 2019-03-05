@@ -1,0 +1,2 @@
+FEATURE ogs.h/Impl
+MAIN_EXAMPLE_LOG("Title: '%s'", EXAMPLE_TITLE);

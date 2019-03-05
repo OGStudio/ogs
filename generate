@@ -21,6 +21,7 @@ STAGES="
 02.Lua
 03.Script
 04.Mouse
+05.Sphere
 "
 
 # Directories with variants.

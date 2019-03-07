@@ -913,6 +913,7 @@ class Environment
 
             // Perform the call.
             return client->call(key, values);
+            
         }
 
         //! Log all calls when verbose.

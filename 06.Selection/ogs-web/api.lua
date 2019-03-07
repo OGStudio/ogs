@@ -172,12 +172,17 @@ function scene.createNode(name)
     local instance = {
         __name = name,
 
-    addChild = function(self, node)
-        local key = "application.nodes.node.addChild"
-        local parent = self.__name
-        local child = node.__name
-        ENV:call(key, {parent, child})
-    end,
+        addChild = function(self, node)
+            local key = "application.nodes.node.addChild"
+            local parent = self.__name
+            local child = node.__name
+            ENV:call(key, {parent, child})
+        end,
+        setMask = function(self, mask)
+            local key = "application.nodes.node.setMask"
+            local node = self.__name
+            ENV:call(key, {node, mask})
+        end,
     }
 
     local propertiesMT = core.createPropertiesMetatable()
@@ -191,6 +196,26 @@ main.application = {}
 
 main.application.camera = {
 
+    nodeAtPosition = function(self, position, selectionMask)
+        local key = "application.camera.nodeAtPosition"
+        local values = ENV:call(
+            key,
+            {
+                position[1],
+                position[2],
+                selectionMask,
+            }
+        )
+    
+        local name = values[1]
+    
+        if (name)
+        then
+            return scene.createNode(name)
+        end
+    
+        return nil
+    end,
 }
 
 local cameraMT = core.createPropertiesMetatable()

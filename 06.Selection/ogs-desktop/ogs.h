@@ -24,9 +24,17 @@ freely, subject to the following restrictions:
 #ifndef OGS_H
 #define OGS_H
 
+#include <algorithm>
+#include <functional>
+#include <string>
+#include <vector>
+
 #include <map>
 
 #include <cstdarg>
+
+#include <algorithm>
+#include <osgGA/GUIEventHandler>
 
 #include <iostream>
 
@@ -39,7 +47,15 @@ freely, subject to the following restrictions:
 
 #include "api.lua.h"
 
+#include <osg/MatrixTransform>
+
+#include <osg/Program>
+
 #include <osg/Camera>
+
+#include <osg/Geode>
+#include <osg/MatrixTransform>
+#include <osg/ShapeDrawable>
 
 #include <functional>
 
@@ -334,6 +350,122 @@ class Base64 {
 namespace ogs
 {
 
+namespace core
+{
+
+class Reporter
+{
+    public:
+        typedef std::function<void()> Callback;
+
+    public:
+        Reporter() { }
+
+        std::string name;
+
+        void addCallback(Callback callback, const std::string &name = "")
+        {
+            // Work around callback reactivation happenning
+            // before `report()` call.
+            if (this->reactivateInactiveCallback(name))
+            {
+                //CORE_REPORTER_LOG("reactivated callback named '%s'", name.c_str());
+                return;
+            }
+
+            this->callbacks.push_back({callback, name});
+            //CORE_REPORTER_LOG("added callback named '%s'", name.c_str());
+        }
+
+        void addOneTimeCallback(Callback callback)
+        {
+            this->oneTimeCallbacks.push_back(callback);
+        }
+
+        void removeCallback(const std::string &name)
+        {
+            // This call only deactivates a callback for
+            // later removal that happens during next report() call.
+            for (auto callback : this->callbacks)
+            {
+                if (callback.name == name)
+                {
+                    this->inactiveCallbackNames.push_back(name);
+                }
+            }
+        }
+
+        void report()
+        {
+            this->removeInactiveCallbacks();
+
+            // Call normal callbacks.
+            for (auto callback : this->callbacks)
+            {
+                callback.callback();
+            }
+
+            // Iterate over duplicated one-time callbacks.
+            auto oneTimeCallbacks = this->oneTimeCallbacks; 
+            // Remove one-time callbacks.
+            this->oneTimeCallbacks.clear();
+            
+            // Call one-time callbacks.
+            for (auto callback : oneTimeCallbacks)
+            {
+                callback();
+            }
+        }
+
+    private:
+        struct NamedCallback
+        {
+            Callback callback;
+            std::string name;
+        };
+
+        std::vector<NamedCallback> callbacks;
+        std::vector<std::string> inactiveCallbackNames;
+        std::vector<Callback> oneTimeCallbacks;
+
+    private:
+        bool reactivateInactiveCallback(const std::string &name)
+        {
+            auto inactives = &this->inactiveCallbackNames;
+            auto it = std::find(inactives->begin(), inactives->end(), name);
+            if (it != inactives->end())
+            {
+                inactives->erase(it);
+                return true;
+            }
+            return false;
+        }
+
+        void removeInactiveCallbacks()
+        {
+            // Loop through the names of inactive callbacks.
+            auto name = this->inactiveCallbackNames.begin();
+            for (; name != this->inactiveCallbackNames.end(); ++name)
+            {
+                // Loop through callbacks to find matching name.
+                auto callback = this->callbacks.begin();
+                for (; callback != this->callbacks.end(); ++callback)
+                {
+                    if (callback->name == *name)
+                    {
+                        // Remove matching callback.
+                        this->callbacks.erase(callback);
+                        break;
+                    }
+                }
+            }
+            // Clear the list of inactive callbacks.
+            this->inactiveCallbackNames.clear();
+        }
+};
+
+}
+
 namespace format
 {
 
@@ -495,8 +627,136 @@ void logprintf(const char *fmt, ...)
 
 }
 
+namespace input
+{
+
+//! NOTE Mobile platforms only have LEFT button.
+enum MOUSE_BUTTON
+{
+    MOUSE_BUTTON_NONE,
+    MOUSE_BUTTON_LEFT,
+    MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE,
+};
+
+//! Convert OpenSceneGraph key index to mouse button enum value.
+MOUSE_BUTTON indexToMouseButton(int index)
+{
+    switch (index)
+    {
+        case osgGA::GUIEventAdapter::LEFT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_LEFT;
+        case osgGA::GUIEventAdapter::MIDDLE_MOUSE_BUTTON:
+            return MOUSE_BUTTON_MIDDLE;
+        case osgGA::GUIEventAdapter::RIGHT_MOUSE_BUTTON:
+            return MOUSE_BUTTON_RIGHT;
+        default:
+            return MOUSE_BUTTON_NONE;
+    }
+}
+
+//! Convert mouse button enum value to string representation.
+const char *mouseButtonToString(MOUSE_BUTTON button)
+{
+    switch (button)
+    {
+        case MOUSE_BUTTON_LEFT:
+            return "MOUSE_BUTTON_LEFT";
+        case MOUSE_BUTTON_RIGHT:
+            return "MOUSE_BUTTON_RIGHT";
+        case MOUSE_BUTTON_MIDDLE:
+            return "MOUSE_BUTTON_MIDDLE";
+        default:
+            return "MOUSE_BUTTON_NONE";
+    }
+}
+//! Handle OpenSceneGraph mouse events.
+class Mouse : public osgGA::GUIEventHandler
+{
+    public:
+        Mouse() : position(0, 0) { }
+
+        // Current mouse position.
+        osg::Vec2f position;
+        core::Reporter positionChanged;
+
+        // Currently pressed mouse buttons.
+        std::vector<MOUSE_BUTTON> pressedButtons;
+        core::Reporter pressedButtonsChanged;
+
+        bool handle(
+            const osgGA::GUIEventAdapter &eventAdapter,
+            osgGA::GUIActionAdapter &actionAdapter,
+            osg::Object *object,
+            osg::NodeVisitor *visitor
+        ) override {
+            // Report mouse position if changed.
+            osg::Vec2f pos(eventAdapter.getX(), eventAdapter.getY());
+            if (this->position != pos)
+            {
+                this->position = pos;
+                this->positionChanged.report();
+                //INPUT_MOUSE_LOG("Position: '%f x %f'", pos.x(), pos.y());
+            }
+
+            // Process pressed buttons.
+            bool isPressed = false;
+            if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::PUSH)
+            {
+                isPressed = true;
+            }
+            else if (eventAdapter.getEventType() == osgGA::GUIEventAdapter::RELEASE)
+            {
+                // Do nothing.
+            }
+            else
+            {
+                return true;
+            }
+            auto button = indexToMouseButton(eventAdapter.getButton());
+            this->setButtonState(button, isPressed);
+            return true;
+        }
+
+    private:
+        void setButtonState(MOUSE_BUTTON button, bool state)
+        {
+            //INPUT_MOUSE_LOG("setButtonState(%d, %d)", button, state);
+            auto &buttons = this->pressedButtons;
+            auto btn = std::find(buttons.begin(), buttons.end(), button);
+            // Button is already pressed.
+            if (btn != buttons.end())
+            {
+                // Release button.
+                if (!state)
+                {
+                    buttons.erase(
+                        std::remove(buttons.begin(), buttons.end(), button),
+                        buttons.end()
+                    );
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Released button '%d'", button);
+                }
+            }
+            // Button is not pressed.
+            else
+            {
+                // Push button.
+                if (state)
+                {
+                    buttons.push_back(button);
+                    this->pressedButtonsChanged.report();
+                    //INPUT_MOUSE_LOG("Pressed button '%d'", button);
+                }
+            }
+        }
+};
+
+}
+
 namespace render
 {
+
 
 //! Create graphics context for desktop: linux, macos, windows.
 osg::GraphicsContext *createGraphicsContext(
@@ -522,6 +782,19 @@ osg::GraphicsContext *createGraphicsContext(
     traits->doubleBuffer = true;
 
     return osg::GraphicsContext::createGraphicsContext(traits);
+}
+osg::Program *createShaderProgram(
+    const std::string &vertexShader,
+    const std::string &fragmentShader
+) {
+    // Load shaders.
+    osg::Shader *vs = new osg::Shader(osg::Shader::VERTEX, vertexShader);
+    osg::Shader *fs = new osg::Shader(osg::Shader::FRAGMENT, fragmentShader);
+    // Compile shaders and compose shader program.
+    osg::ref_ptr<osg::Program> prog = new osg::Program;
+    prog->addShader(vs);
+    prog->addShader(fs);
+    return prog.release();
 }
 // Configure camera with common defaults.
 void setupCamera(
@@ -581,6 +854,64 @@ struct Resource
     std::string name;
     std::string contents;
 };
+
+}
+
+namespace scene
+{
+
+osg::MatrixTransform *createShape(osg::Shape *shape)
+{
+    auto hints = new osg::TessellationHints;
+    hints->setDetailRatio(0.5);
+    auto geode = new osg::Geode();
+    geode->addDrawable(new osg::ShapeDrawable(shape, hints));
+    osg::ref_ptr<osg::MatrixTransform> node = new osg::MatrixTransform;
+    node->addChild(geode);
+    return node.release();
+}
+osg::MatrixTransform *createSphere(float radius)
+{
+    auto sphere = new osg::Sphere(osg::Vec3f(0, 0, 0), radius);
+    return createShape(sphere);
+}
+//! Pick a node at the specified position using camera's point of view.
+
+// \param excludedNodeMask Take the node into consideration only if it excludes specified mask.
+osg::Node *nodeAtPosition(
+    const osg::Vec2f &position,
+    osg::Camera *camera,
+    unsigned int excludedNodeMask
+) {
+    // Find intersections.
+    osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector =
+        new osgUtil::LineSegmentIntersector(
+            osgUtil::Intersector::WINDOW,
+            position.x(),
+            position.y()
+        );
+    osgUtil::IntersectionVisitor iv(intersector.get());
+    camera->accept(iv);
+
+    // No intersections found.
+    if (!intersector->containsIntersections())
+    {
+        return 0;
+    }
+
+    // Get closest intersection.
+    auto intersection = intersector->getFirstIntersection();
+    for (auto node : intersection.nodePath)
+    {
+        // Make sure node mask is excluded.
+        if ((node->getNodeMask() & excludedNodeMask) != excludedNodeMask)
+        {
+            return node;
+        }
+    }
+
+    return 0;
+}
 
 }
 
@@ -660,9 +991,19 @@ class Environment
                 return { };
             }
 
-            // Perform the call.
-            return client->call(key, values);
-            
+            // Perform safe call.
+            try {
+                return client->call(key, values);
+            }
+            catch (const std::exception &e)
+            {
+                SCRIPT_ENVIRONMENT_LOG(
+                    "ERROR Client execution for key '%s' failed: '%s'",
+                    key.c_str(),
+                    e.what()
+                );
+                return { };
+            }
         }
 
         //! Log all calls when verbose.
@@ -681,6 +1022,58 @@ class Environment
 namespace main
 {
 
+class Nodes
+{
+    public:
+        Nodes()
+        {
+
+    this->setupRoot();
+    
+        }
+        ~Nodes()
+        {
+
+        }
+
+    private:
+        std::map<std::string, osg::ref_ptr<osg::MatrixTransform> > nodes;
+
+ 
+    public:
+        osg::MatrixTransform *createSphere(
+            const std::string &name,
+            float radius
+        ) {
+            auto node = scene::createSphere(radius);
+            node->setName(name);
+            this->nodes[name] = node;
+    
+            return node;
+        }
+    public:
+        osg::MatrixTransform *node(const std::string &name)
+        {
+            auto it = this->nodes.find(name);
+    
+            // Return valid node.
+            if (it != this->nodes.end())
+            {
+                return it->second.get();
+            }
+    
+            // Found noting.
+            return 0;
+        }
+ 
+    private:
+        void setupRoot()
+        {
+            auto root = new osg::MatrixTransform;
+            this->nodes["root"] = root;
+        }
+};
+
 class Application
 {
     public:
@@ -688,6 +1081,10 @@ class Application
         {
 
             this->setupRendering();
+            
+            this->setupMouse();
+            
+            this->setupNodes();
             
             this->setupLua();
             
@@ -700,6 +1097,10 @@ class Application
             this->tearScriptingDown();
             
             this->tearLuaDown();
+            
+            this->tearNodesDown();
+            
+            this->tearMouseDown();
             
             this->tearRenderingDown();
             
@@ -771,6 +1172,37 @@ class Application
                     e.what()
                 );
             }
+        }
+    public:
+        osg::ref_ptr<input::Mouse> mouse;
+    private:
+        void setupMouse()
+        {
+            // Create mouse events' handler.
+            this->mouse = new input::Mouse;
+            // Register it.
+            this->viewer->addEventHandler(this->mouse);
+        }
+        void tearMouseDown()
+        {
+            // This also removes `mouse` instance.
+            this->viewer->removeEventHandler(this->mouse);
+        }
+    public:
+        Nodes *nodes;
+    private:
+        void setupNodes()
+        {
+            this->nodes = new Nodes;
+    
+            // Set pool's root node to viewer.
+            auto root = this->nodes->node("root");
+            this->viewer->setSceneData(root);
+        }
+        void tearNodesDown()
+        {
+            this->viewer->setSceneData(0);
+            delete this->nodes;
         }
     private:
         osgViewer::Viewer *viewer;
@@ -858,7 +1290,7 @@ class Application
         }
 };
 
-const auto EXAMPLE_TITLE = "ogs-03: Script";
+const auto EXAMPLE_TITLE = "ogs-06: Selection";
 
 struct Example
 {
@@ -870,6 +1302,9 @@ struct Example
     {
         this->app = new Application(EXAMPLE_TITLE);
 
+        MAIN_EXAMPLE_LOG("Title: '%s'", EXAMPLE_TITLE);
+        this->setupWhiteNodes();
+        
         this->app->registerScriptCallback(
             "application.camera.clearColor",
             SCRIPT_ENVIRONMENT_CLIENT_CALL(
@@ -905,6 +1340,174 @@ struct Example
                 });
             )
         );
+        this->app->registerScriptCallback(
+            "application.camera.nodeAtPosition",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Make sure there are three components.
+                if (values.size() != 3)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set value for key '%s' "
+                        "because values' count is not 3"
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                osg::Vec2d position = {
+                    atof(values[0].c_str()),
+                    atof(values[1].c_str()),
+                };
+                int selectionMask = atoi(values[2].c_str());
+        
+                // Locate a node.
+                auto node =
+                    scene::nodeAtPosition(
+                        position,
+                        this->app->camera(),
+                        selectionMask
+                    );
+        
+                // Return the name of the node if it exists.
+                if (node)
+                {
+                    return std::vector<std::string>({
+                        node->getName()
+                    });
+                }
+        
+                // Return nothing otherwise.
+                return std::vector<std::string>();
+            )
+        );
+        this->setupApplicationMouse();
+        
+        this->app->registerScriptCallback(
+            "application.nodes.createSphere",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Set.
+                if (!values.empty())
+                {
+                    // Make sure there are two components.
+                    if (values.size() != 2)
+                    {
+                        MAIN_EXAMPLE_LOG(
+                            "ERROR Could not set value for key '%s' "
+                            "because values' count is not 2"
+                        );
+                        return std::vector<std::string>();
+                    }
+        
+                    // Create sphere.
+                    auto name = values[0];
+                    auto radius = atof(values[1].c_str());
+                    this->app->nodes->createSphere(name, radius);
+                }
+        
+                return std::vector<std::string>();
+            )
+        );
+        this->app->registerScriptCallback(
+            "application.nodes.node.addChild",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Set.
+                if (!values.empty())
+                {
+                    // Make sure there are two components.
+                    if (values.size() != 2)
+                    {
+                        MAIN_EXAMPLE_LOG(
+                            "ERROR Could not set value for key '%s' "
+                            "because values' count is not 2"
+                        );
+                        return std::vector<std::string>();
+                    }
+        
+                    auto parentName = values[0];
+                    auto parent = this->app->nodes->node(parentName);
+                    auto childName = values[1];
+                    auto child = this->app->nodes->node(childName);
+        
+                    // Make sure parent and child exist.
+                    if (!parent || !child)
+                    {
+                        MAIN_EXAMPLE_LOG(
+                            "ERROR Could not add '%s' child node to '%s' parent node "
+                            "because node(s) do(es) not exist",
+                            childName.c_str(),
+                            parentName.c_str()
+                        );
+                        return std::vector<std::string>();
+                    }
+        
+                    parent->addChild(child);
+                }
+        
+                return std::vector<std::string>();
+            )
+        );
+        this->app->registerScriptCallback(
+            "application.nodes.node.exists",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Set.
+                if (!values.empty())
+                {
+                    // Make sure there is one component.
+                    if (values.size() != 1)
+                    {
+                        MAIN_EXAMPLE_LOG(
+                            "ERROR Could not set value for key '%s' "
+                            "because values' count is not 1"
+                        );
+                        return std::vector<std::string>();
+                    }
+        
+                    // Locate named node.
+                    auto name = values[0];
+                    auto node = this->app->nodes->node(name);
+                    // Report its presence.
+                    if (node != 0)
+                    {
+                        return std::vector<std::string>({ "true" });
+                    }
+                }
+        
+                return std::vector<std::string>();
+            )
+        );
+        this->app->registerScriptCallback(
+            "application.nodes.node.setMask",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Make sure there are two components.
+                if (values.size() != 2)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set value for key '%s' "
+                        "because values' count is not 2"
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                auto name = values[0];
+                auto node = this->app->nodes->node(name);
+        
+                // Make sure node exists.
+                if (!node)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set mask for node named '%s' because "
+                        "it does not exist",
+                        name.c_str()
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                // Set mask.
+                int mask = atoi(values[1].c_str());
+                node->setNodeMask(node->getNodeMask() & ~mask);
+        
+                return std::vector<std::string>();
+            )
+        );
         this->runEmbeddedAPIScript();
         
         this->runBase64Script(parameters);
@@ -913,9 +1516,78 @@ struct Example
     ~Example()
     {
 
+        this->tearApplicationMouseDown();
+        
         delete this->app;
     }
 
+    private:
+        const std::string applicationMousePressedButtonsKey =
+            "application.mouse.pressedButtons";
+        const std::string applicationMousePositionKey =
+            "application.mouse.position";
+        const std::string applicationMouseCallbackName =
+            "ApplicationMouseTransmitter";
+    
+        void setupApplicationMouse()
+        {
+            // Transmit pressed buttons.
+            this->app->mouse->pressedButtonsChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMouseButtons();
+                },
+                this->applicationMouseCallbackName
+            );
+            // Transmit position.
+            this->app->mouse->positionChanged.addCallback(
+                [=] {
+                    this->transmitApplicationMousePosition();
+                },
+                this->applicationMouseCallbackName
+            );
+            // NOTE We don't provide getters for the keys because Lua side should
+            // NOTE keep the state itself.
+            // NOTE Also, we don't provide setters for the keys because C++ side
+            // NOTE has no such notion.
+        }
+        void tearApplicationMouseDown()
+        {
+            this->app->mouse->pressedButtonsChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+            this->app->mouse->positionChanged.removeCallback(
+                this->applicationMouseCallbackName
+            );
+        }
+        void transmitApplicationMouseButtons()
+        {
+            // Convert buttons to string representation.
+            auto buttons = this->app->mouse->pressedButtons;
+            std::vector<std::string> strbuttons;
+            for (auto button : buttons)
+            {
+                strbuttons.push_back(mouseButtonToString(button));
+            }
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePressedButtonsKey,
+                strbuttons
+            );
+        }
+        void transmitApplicationMousePosition()
+        {
+            // Convert position to string representation.
+            auto position = this->app->mouse->position;
+            std::vector<std::string> strposition = {
+                format::printfString("%f", position.x()),
+                format::printfString("%f", position.y()),
+            };
+            // Transmit.
+            this->app->environment->call(
+                this->applicationMousePositionKey,
+                strposition
+            );
+        }
     private:
         void runBase64Script(const Parameters &parameters)
         {
@@ -935,6 +1607,34 @@ struct Example
         {
             resource::Resource api("scripts", "api.lua", api_lua, api_lua_len);
             this->app->executeLuaScript("Embedded API", api.contents);
+        }
+    private:
+        void setupWhiteNodes()
+        {
+            // Create material that paints every scene node in white.
+            const std::string vertexShader = R"(
+    			void main()
+    			{
+    				// Pass vertex to fragment shader.
+    				// Convert from Model/Object space to Screen one.
+    				gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;
+    			}
+            )";
+            const std::string fragmentShader = R"(
+                void main()
+                {
+                    // Paint scene nodes in white.
+                    gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+                }
+            )";
+    
+            auto prog = render::createShaderProgram(vertexShader, fragmentShader);
+            osg::ref_ptr<osg::StateSet> material = new osg::StateSet;
+            material->setAttribute(prog);
+    
+            // Apply material to the whole scene.
+            auto root = this->app->nodes->node("root");
+            root->setStateSet(material);
         }
 };
 

@@ -112,7 +112,9 @@ namespace script
 {
 
 // FEATURE script.EnvironmentClient/Impl
-// FEATURE script.Environment/Impl
+// FEATURE script.Environment/Begin
+            // FEATURE script.Environment/Call
+// FEATURE script.Environment/End
 
 }
 

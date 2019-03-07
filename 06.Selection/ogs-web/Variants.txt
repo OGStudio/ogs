@@ -1,3 +1,4 @@
+MAIN_APPLICATION_LOG
 main.Application
 main.Application.Lua
 main.Application.Mouse
@@ -5,33 +6,34 @@ main.Application.Rendering
 main.Application.Scripting
 main.Application+camera
 main.Application+frame
+main.Application+handleEvent-web
 main.Application+run
-main.Application+setupWindow-desktop
+main.Application+setupWindow-embedded
+main.Application+setupWindow-web
 MAIN_EXAMPLE_LOG
 main.Example
-main.Example.05.Sphere
+main.Example.06.Selection
 main.Example.Base64Script
 main.Example.EmbeddedAPIScript
 main.Example.LogTitle
-main.main-desktop
-main.main.Arguments-desktop
+main.main-web
+main.main.Arguments-web
+main.main.Input-web
 core.Reporter
 format.base64Decode
-format.commandLineArgumentsToParameters
 format.printfString
 format.splitString
-format.stringStartsWith
 format.stringsToString
+format.urlToParameters
 input.Mouse
 input.MouseButtons
 log.log-default
 log.logprintf
-render.createGraphicsContext-desktop
-render.setupCamera
 resource.Resource
 SCRIPT_ENVIRONMENT_CLIENT_CALL
 SCRIPT_ENVIRONMENT_LOG
 script.Environment
+script.Environment.SafeCall
 script.EnvironmentClient
 
 main.Example.API.application.camera.clearColor
@@ -45,12 +47,14 @@ API.main.application.mouse
 main.Application.Nodes
 main.Nodes
 main.Nodes.Root
+main.Nodes.VBO
 main.Nodes+createSphere
 main.Nodes+node
 main.Example.WhiteNodes
 main.Example.API.application.nodes.createSphere
 main.Example.API.application.nodes.node.addChild
 main.Example.API.application.nodes.node.exists
+render.VBOSetupVisitor
 render.createShaderProgram
 scene.createShape
 scene.createSphere
@@ -59,11 +63,19 @@ API.main.application.nodes.node
 API.scene.Node
 API.scene.Node.addChild
 
+API.scene.Node.setMask
+main.Example.API.application.nodes.node.setMask
+API.main.application.camera.nodeAtPosition
+main.Example.API.application.camera.nodeAtPosition
+scene.nodeAtPosition
+
 build.base
-build.05.Sphere
+build.06.Selection
 build.OpenSceneGraph
-build.OpenSceneGraph-desktop
+build.OpenSceneGraph-web
 build.lua
+build.lua-web
+build-web
 
 generate.api
 
@@ -74,6 +86,5 @@ lib.OpenSceneGraph.osgDB
 lib.OpenSceneGraph.osgGA
 lib.OpenSceneGraph.osgUtil
 lib.OpenSceneGraph.osgViewer
-lib.OpenSceneGraph.osgViewer-desktop
 lib.base64
 lib.lua

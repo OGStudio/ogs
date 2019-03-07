@@ -22,6 +22,7 @@ STAGES="
 03.Script
 04.Mouse
 05.Sphere
+06.Selection
 "
 
 # Directories with variants.

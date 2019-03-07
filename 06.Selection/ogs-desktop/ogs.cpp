@@ -1,5 +1,5 @@
 
---[[
+/*
 This file is part of OGS: https://github.com/ogstudio/ogs
 
 Copyright (C) 2019 Opensource Game Studio
@@ -19,31 +19,25 @@ freely, subject to the following restrictions:
 2. Altered source versions must be plainly marked as such, and must not be
    misrepresented as being the original software.
 3. This notice may not be removed or altered from any source distribution.
---]]
+*/
 
-core = {}
+#include "ogs.h"
 
-// FEATURE API.core.PropertiesMetatable/Impl
-// FEATURE API.core.Reporter/Impl
+using namespace ogs;
 
-scene = {}
 
-// FEATURE API.scene.Node/Methods
-    // FEATURE API.scene.Node.addChild/Impl
-// FEATURE API.scene.Node/Properties
-// FEATURE API.scene.Node/End
+int main(int argc, char *argv[])
+{
+    main::Example::Parameters parameters;
+    
+    parameters = format::commandLineArgumentsToParameters(argc, argv);
+    auto example = new main::Example(parameters);
+    example->app->setupWindow(main::EXAMPLE_TITLE, 100, 100, 800, 600);
+    
+    example->app->run();
+    delete example;
 
-main = {}
-main.application = {}
 
-// FEATURE API.main.application.camera/Methods
-// FEATURE API.main.application.camera/Properties
-// FEATURE API.main.application.camera.clearColor/Impl
-
-// FEATURE API.main.application.mouse/Impl
-
-main.application.nodes = {}
-
-// FEATURE API.main.application.nodes.createSphere/Impl
-// FEATURE API.main.application.nodes.node/Impl
+    return 0;
+}
 

@@ -57,7 +57,6 @@ render.VBOSetupVisitor
 render.createShaderProgram
 scene.createShape
 scene.createSphere
-API.main.application.nodes.createNode
 API.main.application.nodes.createSphere
 API.main.application.nodes.node
 API.scene.Node

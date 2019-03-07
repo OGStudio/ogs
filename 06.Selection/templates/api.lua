@@ -29,7 +29,8 @@ core = {}
 scene = {}
 
 // FEATURE API.scene.Node/Methods
-    // FEATURE API.scene.Node.addChild/Impl
+        // FEATURE API.scene.Node.addChild/Impl
+        // FEATURE API.scene.Node.setMask/Impl
 // FEATURE API.scene.Node/Properties
 // FEATURE API.scene.Node/End
 
@@ -37,6 +38,7 @@ main = {}
 main.application = {}
 
 // FEATURE API.main.application.camera/Methods
+    // FEATURE API.main.application.camera.nodeAtPosition/Impl
 // FEATURE API.main.application.camera/Properties
 // FEATURE API.main.application.camera.clearColor/Impl
 

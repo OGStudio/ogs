@@ -1,4 +1,4 @@
-FEATURE ogs.h/Impl
+FEATURE ogs.h/Begin
 //! Hub for entities represented in Lua.
 class Environment
 {
@@ -53,8 +53,11 @@ class Environment
                 return { };
             }
 
-            // Perform the call.
-            return client->call(key, values);
+FEATURE ogs.h/Call
+// Perform the call.
+return client->call(key, values);
+
+FEATURE ogs.h/End
         }
 
         //! Log all calls when verbose.

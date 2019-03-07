@@ -866,6 +866,43 @@ osg::MatrixTransform *createSphere(float radius)
     auto sphere = new osg::Sphere(osg::Vec3f(0, 0, 0), radius);
     return createShape(sphere);
 }
+//! Pick a node at the specified position using camera's point of view.
+
+// \param excludedNodeMask Take the node into consideration only if it excludes specified mask.
+osg::Node *nodeAtPosition(
+    const osg::Vec2f &position,
+    osg::Camera *camera,
+    unsigned int excludedNodeMask
+) {
+    // Find intersections.
+    osg::ref_ptr<osgUtil::LineSegmentIntersector> intersector =
+        new osgUtil::LineSegmentIntersector(
+            osgUtil::Intersector::WINDOW,
+            position.x(),
+            position.y()
+        );
+    osgUtil::IntersectionVisitor iv(intersector.get());
+    camera->accept(iv);
+
+    // No intersections found.
+    if (!intersector->containsIntersections())
+    {
+        return 0;
+    }
+
+    // Get closest intersection.
+    auto intersection = intersector->getFirstIntersection();
+    for (auto node : intersection.nodePath)
+    {
+        // Make sure node mask is excluded.
+        if ((node->getNodeMask() & excludedNodeMask) != excludedNodeMask)
+        {
+            return node;
+        }
+    }
+
+    return 0;
+}
 
 }
 
@@ -945,9 +982,19 @@ class Environment
                 return { };
             }
 
-            // Perform the call.
-            return client->call(key, values);
-            
+            // Perform safe call.
+            try {
+                return client->call(key, values);
+            }
+            catch (const std::exception &e)
+            {
+                SCRIPT_ENVIRONMENT_LOG(
+                    "ERROR Client execution for key '%s' failed: '%s'",
+                    key.c_str(),
+                    e.what()
+                );
+                return { };
+            }
         }
 
         //! Log all calls when verbose.
@@ -1355,7 +1402,7 @@ class Application
         }
 };
 
-const auto EXAMPLE_TITLE = "ogs-05: Sphere";
+const auto EXAMPLE_TITLE = "ogs-06: Selection";
 
 struct Example
 {
@@ -1403,6 +1450,45 @@ struct Example
                     format::printfString("%f", color.g()),
                     format::printfString("%f", color.b()),
                 });
+            )
+        );
+        this->app->registerScriptCallback(
+            "application.camera.nodeAtPosition",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Make sure there are three components.
+                if (values.size() != 3)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set value for key '%s' "
+                        "because values' count is not 3"
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                osg::Vec2d position = {
+                    atof(values[0].c_str()),
+                    atof(values[1].c_str()),
+                };
+                int selectionMask = atoi(values[2].c_str());
+        
+                // Locate a node.
+                auto node =
+                    scene::nodeAtPosition(
+                        position,
+                        this->app->camera(),
+                        selectionMask
+                    );
+        
+                // Return the name of the node if it exists.
+                if (node)
+                {
+                    return std::vector<std::string>({
+                        node->getName()
+                    });
+                }
+        
+                // Return nothing otherwise.
+                return std::vector<std::string>();
             )
         );
         this->setupApplicationMouse();
@@ -1496,6 +1582,40 @@ struct Example
                         return std::vector<std::string>({ "true" });
                     }
                 }
+        
+                return std::vector<std::string>();
+            )
+        );
+        this->app->registerScriptCallback(
+            "application.nodes.node.setMask",
+            SCRIPT_ENVIRONMENT_CLIENT_CALL(
+                // Make sure there are two components.
+                if (values.size() != 2)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set value for key '%s' "
+                        "because values' count is not 2"
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                auto name = values[0];
+                auto node = this->app->nodes->node(name);
+        
+                // Make sure node exists.
+                if (!node)
+                {
+                    MAIN_EXAMPLE_LOG(
+                        "ERROR Could not set mask for node named '%s' because "
+                        "it does not exist",
+                        name.c_str()
+                    );
+                    return std::vector<std::string>();
+                }
+        
+                // Set mask.
+                int mask = atoi(values[1].c_str());
+                node->setNodeMask(node->getNodeMask() & ~mask);
         
                 return std::vector<std::string>();
             )

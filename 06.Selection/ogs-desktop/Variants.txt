@@ -9,7 +9,7 @@ main.Application+run
 main.Application+setupWindow-desktop
 MAIN_EXAMPLE_LOG
 main.Example
-main.Example.05.Sphere
+main.Example.06.Selection
 main.Example.Base64Script
 main.Example.EmbeddedAPIScript
 main.Example.LogTitle
@@ -32,6 +32,7 @@ resource.Resource
 SCRIPT_ENVIRONMENT_CLIENT_CALL
 SCRIPT_ENVIRONMENT_LOG
 script.Environment
+script.Environment.SafeCall
 script.EnvironmentClient
 
 main.Example.API.application.camera.clearColor
@@ -59,8 +60,14 @@ API.main.application.nodes.node
 API.scene.Node
 API.scene.Node.addChild
 
+API.scene.Node.setMask
+main.Example.API.application.nodes.node.setMask
+API.main.application.camera.nodeAtPosition
+main.Example.API.application.camera.nodeAtPosition
+scene.nodeAtPosition
+
 build.base
-build.05.Sphere
+build.06.Selection
 build.OpenSceneGraph
 build.OpenSceneGraph-desktop
 build.lua

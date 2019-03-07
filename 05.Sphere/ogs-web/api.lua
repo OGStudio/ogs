@@ -254,11 +254,6 @@ end
 
 main.application.nodes = {}
 
-function main.application.nodes.createNode(self, name)
-    local key = "application.nodes.createNode"
-    ENV:call(key, {name})
-    return scene.createNode(name)
-end
 function main.application.nodes.createSphere(self, name, radius)
     local key = "application.nodes.createSphere"
     ENV:call(key, {name, radius})

@@ -1,0 +1,6 @@
+DIR=$1
+STAGE=$2
+PLATFORM=$3
+echo "Generate embeddable api.lua.h"
+cd $DIR/$STAGE/ogs-$PLATFORM
+xxd -i api.lua{,.h}

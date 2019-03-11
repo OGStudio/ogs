@@ -23,6 +23,7 @@ STAGES="
 04.Mouse
 05.Sphere
 06.Selection
+07.Orientation
 "
 
 # Directories with variants.

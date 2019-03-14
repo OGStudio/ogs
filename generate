@@ -24,6 +24,7 @@ STAGES="
 05.Sphere
 06.Selection
 07.Orientation
+08.Material
 "
 
 # Directories with variants.
